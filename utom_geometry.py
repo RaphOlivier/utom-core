@@ -3,9 +3,8 @@
 """
 utom_geometry.py — UTOM Geometry v0.1 : interpréteur de graphe (prototype).
 
-Statut : proposition de travail, NON publié, NON vérifié par exécution au
-moment de la rédaction. La suite de tests ci-dessous est la porte
-d'acceptation : l'exécuter avant tout usage.
+Statut : proposition de travail, NON publié. La suite de tests ci-dessous
+est la porte d'acceptation.
 
     python3 utom_geometry.py     # exécute les tests d'acceptation
 
@@ -545,6 +544,7 @@ def run_tests() -> int:
         r["nodes"] = [{"id": "a", "op": "union", "inputs": ["b"]},
                       {"id": "b", "op": "union", "inputs": ["a"]}]
         r["outputs"] = {"solid": "a"}
+        r["exposedDatums"] = []
         expect_error(lambda: validate_recipe(r), "UTOM-GEO-001", "cycle")
 
     def t_unknown_input():
