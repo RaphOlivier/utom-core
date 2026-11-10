@@ -3,9 +3,8 @@
 """
 utom_core.py — UTOM Core v0.1, prototype d'implementation de reference.
 
-Statut : proposition de travail, NON publiee, NON verifiee par execution au
-moment de la redaction. La suite de tests ci-dessous (section 9.2 de la
-specification) est la porte d'acceptation : l'executer avant tout usage.
+Statut : proposition de travail, NON publiee. La suite de tests ci-dessous
+(section 9.2 de la specification) est la porte d'acceptation.
 
     python3 utom_core.py        # execute les tests d'acceptation
 
@@ -526,13 +525,13 @@ def run_tests() -> int:
                      "UTOM-VAL-002", "nombre nu refusé")
 
     def t_label_fr_required():
-        obj = make_screw_example()
+        obj = stamp_version(make_screw_example(), "0.1.0")
         obj["label"] = {"en": "Hexagon head screw"}
         expect_error(lambda: validate_object_definition(obj),
                      "UTOM-VAL-001", "libellé français obligatoire")
 
     def t_iso_edition_required():
-        obj = make_screw_example()
+        obj = stamp_version(make_screw_example(), "0.1.0")
         obj["classification"][0].pop("edition")
         expect_error(lambda: validate_object_definition(obj),
                      "UTOM-VAL-004", "édition ISO obligatoire")
