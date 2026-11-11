@@ -24,3 +24,21 @@ jobs:
         run: python utom_core.py
       - name: Geometry acceptance tests
         run: python utom_geometry.py
+
+  backend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12"]
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install build123d
+        run: pip install build123d
+      - name: build123d backend acceptance tests
+        run: python utom_build123d.py

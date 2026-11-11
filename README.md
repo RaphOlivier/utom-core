@@ -23,6 +23,10 @@ specification and nothing here claims normative compliance.**
   propagation (only affected nodes recompute), named datums instead of
   face/edge indices, mock backend with analytical metrics. Includes 16
   acceptance tests.
+- `utom_build123d.py` — real build123d backend for the Geometry lot 1 catalog
+  (soft dependency: core and geometry never import it). Analytic golden tests
+  (exact volumes, bounding boxes) and the M8x30 screw demonstrator (ISO 4017).
+  Includes 13 acceptance tests; requires `pip install build123d`.
 
 ## Usage
 
@@ -30,6 +34,11 @@ Run the acceptance tests (plain commands, no dependencies):
 
     python3 utom_core.py        # expected: 8 PASS lines
     python3 utom_geometry.py    # expected: 16 PASS lines
+
+Optional real-geometry backend:
+
+    pip install build123d
+    python3 utom_build123d.py   # expected: 13 PASS lines
 
 ## Design rules
 
@@ -44,4 +53,5 @@ Run the acceptance tests (plain commands, no dependencies):
 - Code: Apache-2.0 (see LICENSE and NOTICE).
 - Specification and schemas: CC-BY-4.0 (documents maintained outside this
   repository for now).
-- Library data (future): CC0 or CC-BY-4.0. Never GPL for data.
+- Library data (future): CC0 or CC-BY-4.0. 
+Never GPL for data.
