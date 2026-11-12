@@ -25,6 +25,23 @@ jobs:
       - name: Geometry acceptance tests
         run: python utom_geometry.py
 
+  diag:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+      - name: Geometry acceptance tests (diagnostic)
+        run: |
+          set -o pipefail
+          python utom_geometry.py 2>&1 | tee geo.log
+      - name: Annotate failures
+        if: failure()
+        run: grep -E "FAIL|Error|Traceback|File \"|RÉSULTAT" geo.log | head -30 | sed 's/^/::error::/' || true
+
   backend:
     runs-on: ubuntu-latest
     strategy:
