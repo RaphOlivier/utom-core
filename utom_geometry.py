@@ -11,9 +11,10 @@ est la porte d'acceptation.
 Périmètre : validation de recette (règles V1–V13 de la spécification),
 ordonnancement topologique déterministe, expressions typées (arbres JSON,
 jamais d'eval), exécution avec propagation (seuls les nœuds affectés sont
-recalculés), repères nommés, MockBackend à métriques analytiques.
+recalculés), repères nommés (dont repère externe via datumNode), MockBackend
+à métriques analytiques.
 
-Hors périmètre : backend réel build123d (étape suivante), esquisses
+Hors périmètre : backend réel build123d (voir utom_build123d.py), esquisses
 contraintes, assemblages multi-pièces.
 
 Dépendances : aucune (bibliothèque standard). Python >= 3.10.
@@ -160,8 +161,11 @@ OPS = {
     "transform": {"params": {"tx": "length", "ty": "length", "tz": "length"},
                   "required": ["tx", "ty", "tz"], "inputs": 1, "target": False,
                   "datums": "pass"},
-    "datumPlane": {"params": {"offset": "length"}, "required": [], "inputs": 0,
-                   "target": False, "datums": ["plane"]},
+    "datumPlane": {"params": {"offset": "length", "ox": "length", "oy": "length",
+                              "oz": "length", "nx": "dimensionless",
+                              "ny": "dimensionless", "nz": "dimensionless"},
+                   "required": [], "inputs": 0, "target": False,
+                   "datums": ["plane"]},
 }
 
 
@@ -177,6 +181,8 @@ def _topo_order(nodes):
         t = n.get("target")
         if t:
             d.add(t["node"])
+            if isinstance(t.get("datumNode"), str):
+                d.add(t["datumNode"])
         remaining[n["id"]] = d & ids
     order = []
     while remaining:
@@ -224,6 +230,10 @@ def validate_recipe(recipe):
         if t is not None:
             _req(isinstance(t, dict) and t.get("node") in ids, "UTOM-GEO-002",
                  f"{n['id']} : nœud cible inconnu")
+            dn = t.get("datumNode")
+            if dn is not None:
+                _req(isinstance(dn, str) and dn in ids, "UTOM-GEO-002",
+                     f"{n['id']} : nœud porteur de repère inconnu : {dn!r}")
         spec = OPS[n["op"]]
         for name in spec["required"]:
             _req(name in (n.get("params") or {}), "UTOM-GEO-005",
@@ -347,9 +357,19 @@ def _exec_node(n, env, results, backend):
         tnode, tdatum = n["target"]["node"], n["target"].get("datum")
         tres = results.get(tnode)
         _req(tres is not None, "UTOM-GEO-002", f"{ctx} : cible non calculée : {tnode!r}")
-        _req(isinstance(tdatum, str) and tdatum in tres["datums"], "UTOM-GEO-003",
-             f"{ctx} : repère inexistant : {tnode}.{tdatum!r}")
-        target = {"node": tnode, "datum": tdatum, "result": tres}
+        dnode = n["target"].get("datumNode")
+        if dnode:
+            dres = results.get(dnode)
+            _req(dres is not None, "UTOM-GEO-002",
+                 f"{ctx} : porteur de repère non calculé : {dnode!r}")
+            _req(isinstance(tdatum, str) and tdatum in dres["datums"], "UTOM-GEO-003",
+                 f"{ctx} : repère inexistant : {dnode}.{tdatum!r}")
+            desc = dres["datums"][tdatum]
+        else:
+            _req(isinstance(tdatum, str) and tdatum in tres["datums"], "UTOM-GEO-003",
+                 f"{ctx} : repère inexistant : {tnode}.{tdatum!r}")
+            desc = tres["datums"][tdatum]
+        target = {"node": tnode, "datum": tdatum, "result": tres, "datumDesc": desc}
     _req(n["op"] in backend.capabilities(), "UTOM-GEO-013",
          f"{ctx} : opération non prise en charge par le backend")
     return backend.execute(n["op"], params, inputs, target)
@@ -388,6 +408,8 @@ def execute_recipe(recipe, values, backend, cache=None):
             deps = list(n.get("inputs", []))
             if n.get("target"):
                 deps.append(n["target"]["node"])
+                if isinstance(n["target"].get("datumNode"), str):
+                    deps.append(n["target"]["datumNode"])
             if any(ref in recomputed for ref in deps):
                 need = True
         if need:
@@ -639,6 +661,43 @@ def run_tests() -> int:
         assert abs(r2["solid"]["volume"] - r1["solid"]["volume"]) > 1.0, \
             "le volume aurait dû changer"
 
+    def t_datum_node():
+        one = {"k": "qty", "value": 1, "unit": QUDT + "One"}
+        zero = {"k": "qty", "value": 0, "unit": QUDT + "One"}
+        r = {
+            "parameters": [],
+            "nodes": [
+                {"id": "part", "op": "box",
+                 "params": {"width": MMQ(10), "depth": MMQ(10), "height": MMQ(10)}},
+                {"id": "hole", "op": "drill",
+                 "params": {"diameter": MMQ(4), "depth": MMQ(5)},
+                 "target": {"node": "part", "datum": "plane", "datumNode": "dp"}},
+                {"id": "dp", "op": "datumPlane",
+                 "params": {"ox": MMQ(5), "oy": MMQ(0), "oz": MMQ(5),
+                            "nx": one, "ny": zero, "nz": zero}},
+            ],
+            "outputs": {"solid": "hole"},
+            "exposedDatums": [],
+        }
+        res = execute_recipe(r, {}, MockBackend())
+        removed = math.pi / 4.0 * 4.0 ** 2 * 5.0
+        assert abs(res["solid"]["volume"] - (1000.0 - removed)) < 1e-9, \
+            "perçage via repère externe faux"
+        assert res["recomputed"] == ["dp", "hole", "part"], \
+            f"ordre topologique avec datumNode faux : {res['recomputed']}"
+
+    def t_bad_datum_node():
+        v30 = {"nominalLength": {"value": 30, "unit": QUDT + "MilliM"}}
+        r = _screw_recipe()
+        r["nodes"].append({"id": "dp", "op": "datumPlane", "params": {}})
+        r["nodes"][3]["target"]["datumNode"] = "nope"
+        expect_error(lambda: validate_recipe(r), "UTOM-GEO-002", "datumNode inconnu")
+        r2 = _screw_recipe()
+        r2["nodes"].append({"id": "dp", "op": "datumPlane", "params": {}})
+        r2["nodes"][3]["target"]["datumNode"] = "dp"
+        expect_error(lambda: execute_recipe(r2, v30, MockBackend()),
+                     "UTOM-GEO-003", "repère absent du porteur")
+
     run("validation et ordre topologique déterministe", t_order)
     run("cycle rejeté", t_cycle)
     run("entrée inconnue rejetée", t_unknown_input)
@@ -655,6 +714,8 @@ def run_tests() -> int:
     run("cos(0°) = 1 sans dimension", t_trig)
     run("exécution vis M8×30", t_execution)
     run("propagation : recalcul ciblé", t_propagation)
+    run("datumNode : cible avec repère externe", t_datum_node)
+    run("datumNode invalide rejeté", t_bad_datum_node)
     return failures
 
 

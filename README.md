@@ -21,24 +21,28 @@ specification and nothing here claims normative compliance.**
 - `utom_geometry.py` — declarative geometry recipe interpreter: typed JSON
   expression trees (no eval), deterministic topological execution, change
   propagation (only affected nodes recompute), named datums instead of
-  face/edge indices, mock backend with analytical metrics. Includes 16
-  acceptance tests.
+  face/edge indices, including externally declared datums targeted through
+  `datumNode`, mock backend with analytical metrics. Includes 18 acceptance
+  tests.
 - `utom_build123d.py` — real build123d backend for the Geometry lot 1 catalog
-  (soft dependency: core and geometry never import it). Analytic golden tests
-  (exact volumes, bounding boxes) and the M8x30 screw demonstrator (ISO 4017).
-  Includes 13 acceptance tests; requires `pip install build123d`.
+  (soft dependency: core and geometry never import it). Planar datums work in
+  any orientation: chamfer/fillet select the edges lying in the target plane
+  and drill penetrates along the opposite of the plane normal; `datumPlane`
+  accepts an arbitrary origin and normal. Analytic golden tests (exact
+  volumes, bounding boxes) and the M8x30 screw demonstrator (ISO 4017).
+  Includes 18 acceptance tests; requires `pip install build123d`.
 
 ## Usage
 
 Run the acceptance tests (plain commands, no dependencies):
 
     python3 utom_core.py        # expected: 8 PASS lines
-    python3 utom_geometry.py    # expected: 16 PASS lines
+    python3 utom_geometry.py    # expected: 18 PASS lines
 
 Optional real-geometry backend:
 
     pip install build123d
-    python3 utom_build123d.py   # expected: 13 PASS lines
+    python3 utom_build123d.py   # expected: 18 PASS lines
 
 ## Design rules
 
@@ -53,5 +57,4 @@ Optional real-geometry backend:
 - Code: Apache-2.0 (see LICENSE and NOTICE).
 - Specification and schemas: CC-BY-4.0 (documents maintained outside this
   repository for now).
-- Library data (future): CC0 or CC-BY-4.0. 
-Never GPL for data.
+- Library data (future): CC0 or CC-BY-4.0. Never GPL for data.

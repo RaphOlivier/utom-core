@@ -10,16 +10,21 @@ d'acceptation.
     python3 utom_build123d.py    # exécute les tests d'acceptation
                                  (nécessite : pip install build123d)
 
-Périmètre (étape 1) : catalogue lot 1 de la spécification Geometry v0.1
+Périmètre (étape 2) : catalogue lot 1 de la spécification Geometry v0.1
 derrière le contrat backend (§5.1) : execute/capabilities/version, repères
 nommés (descripteurs position/normale), sélection d'arêtes par repère plan
-(pour chamfer/fillet/drill), démonstrateur vis M8×30 (ISO 4017).
+d'orientation quelconque (chamfer/fillet/drill), forage le long de la normale
+du plan cible, plans de référence orientés (datumPlane), repère externe via
+datumNode, démonstrateur vis M8×30 (ISO 4017).
 
 Conventions géométriques v0.1 :
   - primitives posées sur Z=0, centrées en X/Y ;
   - repères : {"kind": "axis"|"plane"|"point", "origin": [x,y,z],
     "direction"/"normal": [dx,dy,dz]} ;
-  - drill pénètre à l'opposé de la normale du repère plan cible.
+  - chamfer/fillet : arêtes entièrement portées par le plan cible,
+    orientation quelconque du plan ;
+  - drill pénètre à l'opposé de la normale du repère plan cible,
+    orientation quelconque du plan.
 
 Dépendances : build123d (backend), utom_geometry (interpréteur).
 Licence : Apache-2.0 (décision du 2026-11-10).
@@ -37,6 +42,7 @@ from build123d import (
     Circle,
     Compound,
     Cylinder,
+    Plane,
     Polygon,
     Pos,
     RegularPolygon,
@@ -83,15 +89,28 @@ def _unsupported(msg: str):
     raise UtomError("UTOM-GEO-013", msg)
 
 
-def _edges_in_plane(shape, z: float):
-    """Arêtes entièrement portées par le plan horizontal z (repère cible)."""
+def _unit(v):
+    n = math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+    if n < TOL:
+        _unsupported("vecteur normal nul")
+    return (v[0] / n, v[1] / n, v[2] / n)
+
+
+def _edges_in_plane(shape, origin, normal):
+    """Arêtes entièrement portées par le plan (origin, normal), quelle que
+    soit l'orientation du repère cible."""
+    nx, ny, nz = _unit(normal)
+    ox, oy, oz = origin
+
+    def _dist(p):
+        return abs((p.X - ox) * nx + (p.Y - oy) * ny + (p.Z - oz) * nz)
+
     out = []
     for e in shape.edges():
-        bb = e.bounding_box()
-        if abs(bb.min.Z - z) < TOL and abs(bb.max.Z - z) < TOL:
+        if all(_dist(e.position_at(t)) < TOL for t in (0.0, 0.25, 0.5, 0.75, 1.0)):
             out.append(e)
     if not out:
-        _unsupported(f"aucune arête sur le plan cible (z={z})")
+        _unsupported("aucune arête dans le plan cible")
     return out
 
 
@@ -118,10 +137,10 @@ class Build123dBackend:
             return {"geometry": g, "volume": g.volume, "datums": {
                 "top": _plane((0, 0, h), (0, 0, 1)),
                 "bottom": _plane((0, 0, 0), (0, 0, -1)),
-                "left": _plane((-w / 2, 0, 0), (-1, 0, 0)),
-                "right": _plane((w / 2, 0, 0), (1, 0, 0)),
-                "front": _plane((0, -d / 2, 0), (0, -1, 0)),
-                "back": _plane((0, d / 2, 0), (0, 1, 0)),
+                "left": _plane((-w / 2, 0, h / 2), (-1, 0, 0)),
+                "right": _plane((w / 2, 0, h / 2), (1, 0, 0)),
+                "front": _plane((0, -d / 2, h / 2), (0, -1, 0)),
+                "back": _plane((0, d / 2, h / 2), (0, 1, 0)),
             }}
 
         if op == "cylinder":
@@ -169,27 +188,23 @@ class Build123dBackend:
 
         if op in ("chamfer", "fillet"):
             td = target["result"]
-            datum = td["datums"][target["datum"]]
+            datum = target.get("datumDesc") or td["datums"][target["datum"]]
             if datum["kind"] != "plane":
                 _unsupported(f"{op} : le repère cible doit être un plan")
-            if abs(datum["normal"][2]) < 1 - TOL:
-                _unsupported(f"{op} : seul un plan horizontal est pris en charge en v0.1")
-            edges = _edges_in_plane(td["geometry"], datum["origin"][2])
+            edges = _edges_in_plane(td["geometry"], datum["origin"], datum["normal"])
             g = chamfer(edges, params["size"]) if op == "chamfer" \
                 else fillet(edges, params["size"])
             return {"geometry": g, "volume": g.volume, "datums": dict(td["datums"])}
 
         if op == "drill":
             td = target["result"]
-            datum = td["datums"][target["datum"]]
+            datum = target.get("datumDesc") or td["datums"][target["datum"]]
             if datum["kind"] != "plane":
                 _unsupported("drill : le repère cible doit être un plan")
-            o, n = datum["origin"], datum["normal"]
-            if abs(abs(n[2]) - 1.0) > TOL:
-                _unsupported("drill : seul l'axe Z est pris en charge en v0.1")
+            o, n = datum["origin"], _unit(datum["normal"])
+            d = (-n[0], -n[1], -n[2])  # pénètre à l'opposé de la normale
             r, depth = params["diameter"] / 2.0, params["depth"]
-            z0 = o[2] - depth if n[2] > 0 else o[2]
-            cyl = Pos(o[0], o[1], z0) * Cylinder(
+            cyl = Plane(o, z_dir=d) * Cylinder(
                 radius=r, height=depth, align=(Align.CENTER, Align.CENTER, Align.MIN))
             g = td["geometry"] - cyl
             return {"geometry": g, "volume": g.volume, "datums": dict(td["datums"])}
@@ -217,8 +232,14 @@ class Build123dBackend:
 
         if op == "datumPlane":
             off = params.get("offset", 0.0)
+            origin = (params.get("ox", 0.0), params.get("oy", 0.0),
+                      params.get("oz", 0.0))
+            n = _unit((params.get("nx", 0.0), params.get("ny", 0.0),
+                       params.get("nz", 1.0)))
+            origin = (origin[0] + n[0] * off, origin[1] + n[1] * off,
+                      origin[2] + n[2] * off)
             return {"geometry": None, "volume": 0.0,
-                    "datums": {"plane": _plane((0, 0, off), (0, 0, 1))}}
+                    "datums": {"plane": _plane(origin, n)}}
 
         _unsupported(f"opération non implémentée par le backend : {op!r}")
 
@@ -253,6 +274,7 @@ def run_tests() -> int:
         expect_close(bb.size.Y, 20.0, 1e-6, "bbox Y")
         expect_close(bb.min.Z, 0.0, 1e-6, "bbox zmin")
         expect_close(bb.max.Z, 5.0, 1e-6, "bbox zmax")
+        expect_close(r["datums"]["right"]["origin"][2], 2.5, 1e-9, "repère right centré")
 
     def t_cylinder():
         b = Build123dBackend()
@@ -292,7 +314,8 @@ def run_tests() -> int:
         cyl = b.execute("cylinder", {"diameter": 4.0, "height": 20.0}, [], None)
         through = math.pi * 4.0 * 10.0
         u = b.execute("union", {}, [box, cyl], None)
-        expect_close(u["volume"], 1000.0 + math.pi * 4.0 * 20.0 - through, 1e-6, "union")
+        expect_close(u["volume"], 1000.0 + math.pi * 4.0 * 20.0 - through,
+                     1e-6, "union")
         s = b.execute("subtract", {}, [box, cyl], None)
         expect_close(s["volume"], 1000.0 - through, 1e-6, "subtract")
         i = b.execute("intersect", {}, [box, cyl], None)
@@ -324,6 +347,76 @@ def run_tests() -> int:
         expect_close(r["volume"], math.pi * 16.0 * 10.0 - math.pi * 4.0 * 5.0, 1e-6,
                      "volume percé")
 
+    def t_chamfer_side():
+        b = Build123dBackend()
+
+        def cube():
+            return b.execute("box", {"width": 10.0, "depth": 10.0, "height": 10.0}, [], None)
+
+        top = b.execute("chamfer", {"size": 1.0}, [],
+                        {"node": "c", "datum": "top", "result": cube()})
+        side = b.execute("chamfer", {"size": 1.0}, [],
+                         {"node": "c", "datum": "right", "result": cube()})
+        expect_close(side["volume"], top["volume"], 1e-4,
+                     "chanfrein latéral = chanfrein supérieur (symétrie du cube)")
+        assert side["volume"] < 1000.0, "le chanfrein doit retirer de la matière"
+
+    def t_fillet_side():
+        b = Build123dBackend()
+
+        def cube():
+            return b.execute("box", {"width": 10.0, "depth": 10.0, "height": 10.0}, [], None)
+
+        top = b.execute("fillet", {"size": 1.0}, [],
+                        {"node": "c", "datum": "top", "result": cube()})
+        side = b.execute("fillet", {"size": 1.0}, [],
+                         {"node": "c", "datum": "right", "result": cube()})
+        expect_close(side["volume"], top["volume"], 1e-4,
+                     "congé latéral = congé supérieur (symétrie du cube)")
+        assert side["volume"] < 1000.0, "le congé doit retirer de la matière"
+
+    def t_drill_side():
+        b = Build123dBackend()
+        box = b.execute("box", {"width": 10.0, "depth": 10.0, "height": 10.0}, [], None)
+        target = {"node": "part", "datum": "right", "result": box}
+        r = b.execute("drill", {"diameter": 4.0, "depth": 5.0}, [], target)
+        expect_close(r["volume"], 1000.0 - math.pi * 4.0 * 5.0, 1e-6,
+                     "volume percé en face latérale")
+        bb = r["geometry"].bounding_box()
+        expect_close(bb.size.X, 10.0, 1e-6, "bbox X inchangée")
+        expect_close(bb.size.Z, 10.0, 1e-6, "bbox Z inchangée")
+
+    def _radial_hole_recipe():
+        one = {"k": "qty", "value": 1, "unit": QUDT + "One"}
+        zero = {"k": "qty", "value": 0, "unit": QUDT + "One"}
+        return {
+            "parameters": [],
+            "nodes": [
+                {"id": "wheel", "op": "cylinder",
+                 "params": {"diameter": MMQ(20), "height": MMQ(10)}},
+                {"id": "hole", "op": "drill",
+                 "params": {"diameter": MMQ(6), "depth": MMQ(10)},
+                 "target": {"node": "wheel", "datum": "plane", "datumNode": "dp"}},
+                {"id": "dp", "op": "datumPlane",
+                 "params": {"ox": MMQ(10), "oy": MMQ(0), "oz": MMQ(5),
+                            "nx": one, "ny": zero, "nz": zero}},
+            ],
+            "outputs": {"solid": "hole"},
+            "exposedDatums": [],
+        }
+
+    def t_drill_radial():
+        b = Build123dBackend()
+        res = execute_recipe(_radial_hole_recipe(), {}, b)
+        v0 = math.pi * 100.0 * 10.0
+        full_hole = math.pi * 9.0 * 10.0
+        v = res["solid"]["volume"]
+        assert v0 - full_hole - 1e-6 < v < v0 - 1.0, \
+            f"volume percé radialement hors bornes : {v}"
+        bb = res["solid"]["geometry"].bounding_box()
+        expect_close(bb.size.X, 20.0, 1e-6, "bbox X roue")
+        expect_close(bb.size.Z, 10.0, 1e-6, "bbox Z roue")
+
     def t_pattern():
         b = Build123dBackend()
         box = b.execute("box", {"width": 5.0, "depth": 5.0, "height": 5.0}, [], None)
@@ -346,6 +439,16 @@ def run_tests() -> int:
         b = Build123dBackend()
         r = b.execute("datumPlane", {"offset": 2.5}, [], None)
         expect_close(r["datums"]["plane"]["origin"][2], 2.5, 1e-9, "plan décalé")
+        assert r["datums"]["plane"]["normal"] == [0.0, 0.0, 1.0], "normale par défaut"
+
+    def t_datum_plane_oriented():
+        b = Build123dBackend()
+        r = b.execute("datumPlane", {"ox": 10.0, "oy": 0.0, "oz": 5.0,
+                                     "nx": 1.0, "ny": 0.0, "nz": 0.0}, [], None)
+        d = r["datums"]["plane"]
+        assert d["normal"] == [1.0, 0.0, 0.0], "normale orientée"
+        expect_close(d["origin"][0], 10.0, 1e-9, "origine x du plan orienté")
+        expect_close(d["origin"][2], 5.0, 1e-9, "origine z du plan orienté")
 
     def _screw_recipe():
         return {
@@ -410,9 +513,14 @@ def run_tests() -> int:
     run("chamfer : volume du cône exact", t_chamfer)
     run("fillet : volume du tore exact", t_fillet)
     run("drill : perçage sur repère plan", t_drill)
+    run("chamfer : plan vertical (symétrie du cube)", t_chamfer_side)
+    run("fillet : plan vertical (symétrie du cube)", t_fillet_side)
+    run("drill : perçage en face latérale", t_drill_side)
+    run("drill : perçage radial d'un cylindre via datumNode", t_drill_radial)
     run("patternLinear : motif et étendue", t_pattern)
     run("transform : translation et repères", t_transform)
     run("datumPlane : plan décalé", t_datum_plane)
+    run("datumPlane : plan orienté", t_datum_plane_oriented)
     run("golden : vis M8×30 (ISO 4017)", t_screw_golden)
     run("déterminisme de la reconstruction", t_determinism)
     return failures
